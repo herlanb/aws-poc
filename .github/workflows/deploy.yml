@@ -1,4 +1,4 @@
-name: Deploy CDK Stack
+name: Deploy to ECS
 
 on:
   pull_request:
@@ -9,38 +9,19 @@ on:
 
 jobs:
   deploy:
-    # Solo ejecuta si el PR fue mergeado
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout del código
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
-      # 3. Instalar dependencias del proyecto principal
-      - name: Install dependencies
-        run: npm ci
-
-      # 4. Instalar dependencias de Lambda
-      - name: Install Lambda dependencies
-        run: |
-          cd lambda
-          npm ci
-          cd ..
-
-      # 5. Build del proyecto
-      - name: Build
-        run: npm run build
-
-      # 6. Configurar credenciales AWS
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -48,14 +29,55 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # 7. CDK Diff (preview de cambios)
-      - name: CDK Diff
-        run: npx cdk diff
+      # ========== DEPLOY INFRAESTRUCTURA ==========
+      
+      - name: Install CDK dependencies
+        run: npm ci
 
-      # 8. CDK Deploy
-      - name: CDK Deploy
-        run: npx cdk deploy --require-approval never
+      - name: Build CDK
+        run: npm run build
 
-      # 9. Mostrar outputs
-      - name: Show Stack Outputs
-        run: aws cloudformation describe-stacks --stack-name AwsPocStack --query 'Stacks[0].Outputs'
+      - name: CDK Deploy Infrastructure
+        run: npx cdk deploy --require-approval never --outputs-file outputs.json
+
+      # ========== BUILD Y PUSH DOCKER IMAGE ==========
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Get repository URI from outputs
+        id: get-repo
+        run: |
+          REPO_URI=$(cat outputs.json | jq -r '.AwsPocStack.RepositoryUri')
+          echo "REPO_URI=$REPO_URI" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: csv-processor
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          cd app
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      # ========== UPDATE ECS SERVICE ==========
+      
+      - name: Force new deployment in ECS
+        run: |
+          aws ecs update-service \
+            --cluster csv-processor-cluster \
+            --service csv-processor-service \
+            --force-new-deployment
+
+      - name: Wait for service to stabilize
+        run: |
+          aws ecs wait services-stable \
+            --cluster csv-processor-cluster \
+            --services csv-processor-service
+
+      - name: Deployment successful
+        run: echo "Deployment to ECS completed successfully!"
