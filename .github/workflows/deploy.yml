@@ -1,0 +1,61 @@
+name: Deploy CDK Stack
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+
+jobs:
+  deploy:
+    # Solo ejecuta si el PR fue mergeado
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout del código
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. Setup Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 3. Instalar dependencias del proyecto principal
+      - name: Install dependencies
+        run: npm ci
+
+      # 4. Instalar dependencias de Lambda
+      - name: Install Lambda dependencies
+        run: |
+          cd lambda
+          npm ci
+          cd ..
+
+      # 5. Build del proyecto
+      - name: Build
+        run: npm run build
+
+      # 6. Configurar credenciales AWS
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # 7. CDK Diff (preview de cambios)
+      - name: CDK Diff
+        run: npx cdk diff
+
+      # 8. CDK Deploy
+      - name: CDK Deploy
+        run: npx cdk deploy --require-approval never
+
+      # 9. Mostrar outputs
+      - name: Show Stack Outputs
+        run: aws cloudformation describe-stacks --stack-name AwsPocStack --query 'Stacks[0].Outputs'
