@@ -20,6 +20,17 @@ export class AwsPocStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY, // Para POC - borra todo al hacer destroy
     });
 
+    new dynamodb.Table(this, 'PersonasTable-Aux', {
+      tableName: 'Personas-Aux',
+      partitionKey: {
+        name: 'id',
+        type: dynamodb.AttributeType.STRING
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // Para POC - borra todo al hacer destroy
+    });
+
+
     // Bucket S3
     const bucket = new s3.Bucket(this, 'CsvBucket', {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
